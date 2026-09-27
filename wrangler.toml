@@ -5,6 +5,10 @@ compatibility_date = "2024-04-01"
 [placement]
 mode = "smart"
 
+[[kv_namespaces]]
+binding = "SUB_CACHE"
+id = "15d45549162f48aaa7c3bfb41fe14c1c"
+
 [vars]
 # 💥 私密管理密碼（選填）：設定後將保護「已儲存的配置」管理區域，避免他人檢視或竄改
 # PAGE_PASSWORD = "your_secret_password"
