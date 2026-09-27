@@ -30,11 +30,6 @@ jobs:
       - name: Install dependencies
         run: npm install --prefer-offline
 
-      # 替換 KV ID
-      - name: Inject KV ID from Secrets
-        run: |
-          sed -i 's/KV_ID_PLACEHOLDER/${{ secrets.CF_KV_ID }}/g' wrangler.toml
-
       # 部署步驟
       - name: Deploy
         uses: cloudflare/wrangler-action@v3

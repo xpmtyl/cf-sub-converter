@@ -16,6 +16,18 @@ import { deduplicateNodeNames, groupNodesByFlag } from './utils';
 
 const version = packageJson.version || '3.5.0';
 
+// KV-less safe fallback: degrade gracefully when SUB_CACHE binding is absent
+// (deploy token has Workers but not KV Storage permission; live conversion still
+//  works fully, only short-link / saved-config persistence is disabled)
+const KV_STUB = {
+  get: async () => null,
+  put: async () => {},
+  delete: async () => {},
+} as any;
+function KV(env: any) {
+  return (env && env.SUB_CACHE) ? env.SUB_CACHE : KV_STUB;
+}
+
 // 密碼鑒權校驗
 function checkAuth(request: Request, env: Env): boolean {
   if (!env.PAGE_PASSWORD || env.PAGE_PASSWORD.trim() === '') {
@@ -162,8 +174,8 @@ export default {
     // GET /argo/sh/:id
     if (request.method === 'GET' && url.pathname.startsWith('/argo/sh/')) {
       const scriptId = url.pathname.split('/').pop();
-      if (env.SUB_CACHE && scriptId) {
-        const script = await env.SUB_CACHE.get(`script:${scriptId}`);
+      if (KV(env) && scriptId) {
+        const script = await KV(env).get(`script:${scriptId}`);
         if (script) {
           return new Response(script, {
             headers: { 
@@ -272,9 +284,9 @@ export default {
         }
 
         let scriptId = '';
-        if (env.SUB_CACHE) {
+        if (KV(env)) {
           scriptId = crypto.randomUUID();
-          await env.SUB_CACHE.put('script:' + scriptId, scripts, { expirationTtl: 3600 });
+          await KV(env).put('script:' + scriptId, scripts, { expirationTtl: 3600 });
         }
 
         return new Response(JSON.stringify({ 
@@ -318,11 +330,11 @@ export default {
         const jsonStr = JSON.stringify(saveData);
 
         // 1. 寫入原始鍵值
-        await env.SUB_CACHE.put(cleanPath, jsonStr);
+        await KV(env).put(cleanPath, jsonStr);
 
         // 2. 若含大寫，同步備份全小寫鍵值
         if (cleanPath !== cleanPath.toLowerCase()) {
-          await env.SUB_CACHE.put(cleanPath.toLowerCase(), jsonStr);
+          await KV(env).put(cleanPath.toLowerCase(), jsonStr);
         }
         
         return new Response('OK', { 
@@ -337,11 +349,11 @@ export default {
     // --- Favorites API ---
     const FAVS_KEY = 'favorites';
     const getFavs = async (): Promise<Array<Record<string, string>>> => {
-      const data = await env.SUB_CACHE.get(FAVS_KEY);
+      const data = await KV(env).get(FAVS_KEY);
       return data ? JSON.parse(data) : [];
     };
     const saveFavs = async (favs: Array<Record<string, string>>): Promise<void> => {
-      await env.SUB_CACHE.put(FAVS_KEY, JSON.stringify(favs));
+      await KV(env).put(FAVS_KEY, JSON.stringify(favs));
     };
 
     if (request.method === 'GET' && url.pathname === '/favs') {
@@ -380,9 +392,9 @@ export default {
           exclude: body.exclude || '',
           rename: body.rename || ''
         });
-        await env.SUB_CACHE.put(cleanName, syncData);
+        await KV(env).put(cleanName, syncData);
         if (cleanName !== cleanName.toLowerCase()) {
-          await env.SUB_CACHE.put(cleanName.toLowerCase(), syncData);
+          await KV(env).put(cleanName.toLowerCase(), syncData);
         }
 
         return new Response('OK', { status: 200, headers: { 'Access-Control-Allow-Origin': '*' } });
@@ -416,9 +428,9 @@ export default {
             exclude: body.exclude || '',
             rename: body.rename || ''
           });
-          await env.SUB_CACHE.put(cleanName, syncData);
+          await KV(env).put(cleanName, syncData);
           if (cleanName !== cleanName.toLowerCase()) {
-            await env.SUB_CACHE.put(cleanName.toLowerCase(), syncData);
+            await KV(env).put(cleanName.toLowerCase(), syncData);
           }
         }
         return new Response('OK', { status: 200, headers: { 'Access-Control-Allow-Origin': '*' } });
@@ -439,8 +451,8 @@ export default {
           const removed = favs.splice(body.index, 1)[0];
           await saveFavs(favs);
           if (removed && removed.name) {
-            await env.SUB_CACHE.delete(removed.name.trim());
-            await env.SUB_CACHE.delete(removed.name.trim().toLowerCase());
+            await KV(env).delete(removed.name.trim());
+            await KV(env).delete(removed.name.trim().toLowerCase());
           }
         }
         return new Response('OK', { status: 200, headers: { 'Access-Control-Allow-Origin': '*' } });
@@ -468,16 +480,16 @@ export default {
       }
       
       // 1. 優先直接讀取原始 path
-      let stored = await env.SUB_CACHE.get(path);
+      let stored = await KV(env).get(path);
       
       // 2. 若未找到，嘗試小寫
       if (!stored && path !== path.toLowerCase()) {
-        stored = await env.SUB_CACHE.get(path.toLowerCase());
+        stored = await KV(env).get(path.toLowerCase());
       }
 
       // 3. 若未找到，嘗試大寫 (關鍵修復：輸入 cf_masque 亦可尋獲 CF_MASQUE)
       if (!stored && path !== path.toUpperCase()) {
-        stored = await env.SUB_CACHE.get(path.toUpperCase());
+        stored = await KV(env).get(path.toUpperCase());
       }
 
       if (stored) { 
@@ -497,7 +509,7 @@ export default {
       // 4. 終極容災：若獨立 Key 未找到，搜尋收藏夾列表 (Favorites)
       if (!urlParam || urlParam.trim() === '') {
         try {
-          const favsData = await env.SUB_CACHE.get('favorites');
+          const favsData = await KV(env).get('favorites');
           if (favsData) {
             const favsList = JSON.parse(favsData) as Array<Record<string, string>>;
             const matched = favsList.find(f => 
